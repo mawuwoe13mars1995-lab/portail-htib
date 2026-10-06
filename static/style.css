@@ -1,0 +1,57 @@
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#26364a;background:#f4f7fb}
+.top{background:#063b78;color:#fff;font-size:13px;padding:9px 7%;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px}
+.brand{padding:16px 7%;display:flex;align-items:center;gap:16px;background:#fff;border-bottom:1px solid #e3e8ef}
+.logo{width:56px;height:56px;min-width:56px;border-radius:50%;background:#fff url('/static/logo.png') center/cover no-repeat;border:1px solid #e3e8ef}
+.brand h1{margin:0;color:#063b78;font-size:22px}
+.brand p{margin:4px 0 0;color:#667085;font-size:13px}
+.nav{background:#e5ad25;padding:10px 7%;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.nav a,.nav button,.btn{border:0;border-radius:4px;padding:9px 13px;cursor:pointer;font-weight:bold;font-family:inherit;font-size:14px;text-decoration:none;display:inline-block}
+.nav a,.nav button{background:transparent;color:#063b78}
+.nav a:hover,.nav button:hover{background:#063b7822}
+.nav a.actif{background:#063b78;color:#fff}
+.btn{background:#e5ad25;color:#063b78}
+.btn:hover{background:#d49d1c}
+.btn.danger{background:#b42318;color:#fff}
+.main{max-width:1200px;margin:26px auto;padding:0 20px}
+.main h2{color:#063b78}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:13px}
+.card{background:#fff;padding:18px;border:1px solid #e3e8ef;border-radius:6px;box-shadow:0 3px 12px #172b4d16;margin:12px 0}
+.num{font-size:27px;font-weight:bold;color:#063b78}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:9px}
+.form input,.form select,.form textarea{padding:10px;border:1px solid #ccd6e5;border-radius:4px;font-family:inherit;font-size:14px}
+.form button{grid-column:1/-1}
+.table{width:100%;border-collapse:collapse}
+.table th{color:#063b78;border-bottom:2px solid #e5ad25;text-align:left}
+.table th,.table td{padding:8px;border-bottom:1px solid #e5eaf0;text-align:left}
+.muted{color:#667085}
+.badge{display:inline-block;padding:3px 9px;border-radius:12px;font-size:11.5px;font-weight:bold}
+.badge-attente{background:#fdf0d5;color:#935b00}
+.badge-accorde{background:#e3f6e8;color:#157347}
+.badge-rejete{background:#fbe4e1;color:#b42318}
+.banniere{background:#e3f6e8;border-left:4px solid #157347;padding:14px 18px;border-radius:4px;margin:12px 0;color:#0f5132}
+.erreur{background:#fbe4e1;border-left:4px solid #b42318;padding:12px 16px;border-radius:4px;margin:12px 0;color:#7a1c10}
+.checklist{list-style:none;padding:0;margin:0}
+.checklist li{padding:8px 0;border-bottom:1px solid #e5eaf0}
+.checklist li:last-child{border-bottom:0}
+.fiche{background:#fff;border:1px solid #e3e8ef;padding:24px;border-radius:6px}
+.fiche table{width:100%;border-collapse:collapse;margin:10px 0}
+.fiche td{padding:6px 4px;border-bottom:1px solid #f0f3f7}
+.fiche td:first-child{color:#667085;width:45%}
+.portail-wrap{display:grid;grid-template-columns:180px 1fr 300px;gap:18px;align-items:start}
+.espace-wrap{display:grid;grid-template-columns:200px 1fr;gap:18px;align-items:start}
+.side{background:#fff;border:1px solid #e3e8ef;border-radius:6px;padding:10px 0;display:flex;flex-direction:column}
+.side a{display:block;padding:10px 16px;color:#063b78;text-decoration:none;font-size:14px;cursor:pointer;border-left:3px solid transparent}
+.side a:hover{background:#f4f7fb}
+.side a.active{border-left-color:#e5ad25;background:#f4f7fb;font-weight:bold}
+.side-titre{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#8795a8;padding:12px 16px 4px;font-weight:bold}
+.side-titre:first-child{padding-top:10px}
+.onglets{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.onglets a{border:1px solid #ccd6e5;border-radius:4px;padding:7px 12px;font-size:13px;text-decoration:none;color:#063b78}
+.onglets a.actif{background:#063b78;color:#fff;border-color:#063b78}
+.profil-item{border-top:1px solid #e5eaf0;padding:12px 0}
+.profil-item:first-child{border-top:0;padding-top:0}
+.profil-item h4{margin:0 0 6px;color:#063b78;font-size:14px}
+.profil-item p{margin:0 0 8px;font-size:12.5px;color:#667085}
+@media(max-width:900px){.portail-wrap,.espace-wrap{grid-template-columns:1fr}}
+@media(max-width:650px){.top,.brand,.nav{padding-left:20px;padding-right:20px}.main{margin-top:14px}}

@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: portail-htib
+    env: python
+    plan: free
+    buildCommand: "echo 'Aucune dépendance à installer : bibliothèque standard de Python uniquement.'"
+    startCommand: "python3 app.py"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
