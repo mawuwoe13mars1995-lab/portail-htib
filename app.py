@@ -10,6 +10,7 @@ Lancement : python3 app.py   (ou "py app.py" sous Windows)
 import html
 import os
 import secrets
+import textwrap
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
@@ -38,6 +39,119 @@ def esc(x):
 
 def fmt_fcfa(montant):
     return f"{montant:,}".replace(",", " ") + " FCFA"
+
+
+# ----------------------------------------------------------------------------
+# Génération du guide utilisateur en PDF — aucune bibliothèque externe :
+# le fichier PDF est construit directement, octet par octet, à partir de la
+# bibliothèque standard de Python uniquement.
+# ----------------------------------------------------------------------------
+
+SECTIONS_GUIDE = [
+    ("1. Créer un compte", [
+        "Depuis la page d'accueil du portail, choisissez votre profil (Nouveau bachelier, "
+        "Ancien bachelier, Étudiant déjà inscrit, BAC étranger ou Master Professionnel), puis "
+        "cliquez sur « Créer un compte ». Renseignez votre identité : un identifiant et un mot "
+        "de passe vous seront demandés pour vous connecter ensuite.",
+    ]),
+    ("2. Déposer vos vœux de parcours", [
+        "Une fois connecté, ouvrez « Mon espace » puis « Parcours ». Les nouveaux bacheliers et "
+        "les bacheliers étrangers classent jusqu'à 3 vœux de parcours par ordre de préférence. "
+        "Les étudiants déjà inscrits confirment leur réinscription dans leur parcours actuel ou "
+        "déposent une demande de réorientation. Les candidats au Master Professionnel choisissent "
+        "directement le parcours visé.",
+    ]),
+    ("3. Attendre la validation", [
+        "Le service de la scolarité examine votre dossier et accorde ou rejette votre vœu. Le "
+        "statut est visible à tout moment dans votre espace candidat.",
+    ]),
+    ("4. Unités d'enseignement", [
+        "Une fois votre parcours accordé, rendez-vous dans « Unités d'enseignement ». Les UE "
+        "obligatoires sont inscrites automatiquement ; vous choisissez vos UE libres, pouvez "
+        "retirer une UE libre avant confirmation, et consultez le récapitulatif de vos UE "
+        "choisies puis confirmées après paiement.",
+    ]),
+    ("5. Paiement et fiche d'inscription", [
+        "Effectuez le paiement des frais de scolarité depuis votre espace, puis téléchargez "
+        "votre fiche d'inscription.",
+    ]),
+    ("6. Dépôt du dossier", [
+        "Déposez les pièces demandées (variable selon votre profil : diplôme du BAC, "
+        "équivalence pour les bacheliers étrangers, diplôme de Licence ou BTS pour le Master "
+        "Professionnel, etc.).",
+    ]),
+    ("7. Résultats et œuvres universitaires", [
+        "Les menus « Résultats » (notes, cursus, relevés) et « Œuvres universitaires » "
+        "(logement, fiche médicale, rendez-vous) sont accessibles depuis votre espace une fois "
+        "votre dossier en cours de traitement.",
+    ]),
+]
+
+
+def _pdf_echapper(texte):
+    return texte.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _pdf_assembler(pages_textes):
+    """Construit les octets d'un PDF valide à partir du contenu texte de
+    chaque page (opérateurs de flux déjà prêts)."""
+    objets = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        ("<< /Type /Pages /Kids [" + " ".join(f"{5 + 2 * i} 0 R" for i in range(len(pages_textes))) + f"] /Count {len(pages_textes)} >>").encode("ascii"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+    ]
+    for contenu in pages_textes:
+        contenu_bytes = contenu.encode("cp1252", errors="replace")
+        obj_contenu = len(objets) + 2
+        objets.append(
+            (f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+             f"/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {obj_contenu} 0 R >>").encode("ascii")
+        )
+        objets.append(b"<< /Length " + str(len(contenu_bytes)).encode("ascii") + b" >>\nstream\n" + contenu_bytes + b"\nendstream")
+
+    sortie = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    positions = []
+    for i, obj in enumerate(objets, start=1):
+        positions.append(len(sortie))
+        sortie += f"{i} 0 obj\n".encode("ascii") + obj + b"\nendobj\n"
+    debut_xref = len(sortie)
+    sortie += f"xref\n0 {len(objets) + 1}\n".encode("ascii")
+    sortie += b"0000000000 65535 f \n"
+    for pos in positions:
+        sortie += f"{pos:010d} 00000 n \n".encode("ascii")
+    sortie += f"trailer\n<< /Size {len(objets) + 1} /Root 1 0 R >>\nstartxref\n{debut_xref}\n%%EOF".encode("ascii")
+    return bytes(sortie)
+
+
+def construire_guide_pdf():
+    marge_haut, marge_bas, x = 792, 56, 56
+    pages, flux, y = [], [], [marge_haut]
+
+    def nouvelle_page():
+        pages.append("\n".join(flux))
+        flux.clear()
+        y[0] = marge_haut
+
+    def ecrire(texte, taille=11, gras=False, avant=0, apres=15):
+        if y[0] - avant - apres < marge_bas:
+            nouvelle_page()
+        y[0] -= avant
+        police = "F2" if gras else "F1"
+        flux.append(f"BT /{police} {taille} Tf {x} {y[0]:.0f} Td ({_pdf_echapper(texte)}) Tj ET")
+        y[0] -= apres
+
+    ecrire("Guide utilisateur", taille=20, gras=True, apres=8)
+    ecrire("Portail HTIB ATLANTIS — inscription en ligne", taille=12, apres=30)
+    for titre_section, paragraphes in SECTIONS_GUIDE:
+        ecrire(titre_section, taille=13, gras=True, avant=8, apres=18)
+        for p in paragraphes:
+            for ligne in textwrap.wrap(p, width=92):
+                ecrire(ligne, taille=11, apres=15)
+            y[0] -= 6
+    if flux or not pages:
+        pages.append("\n".join(flux))
+    return _pdf_assembler(pages)
 
 
 # ----------------------------------------------------------------------------
@@ -94,6 +208,7 @@ def nav_candidat(actif=""):
 def nav_staff(actif=""):
     items = [
         ("/personnel/tableau", "Tableau de bord", "tableau"),
+        ("/personnel/dates", "Dates importantes", "dates"),
         ("/personnel/validation", "Validation Candidatures", "validation"),
         ("/personnel/etudiants", "Étudiants", "etudiants"),
         ("/personnel/paiements", "Paiements", "paiements"),
@@ -279,6 +394,15 @@ class Gestionnaire(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def servir_guide_pdf(self):
+        data = construire_guide_pdf()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Disposition", 'attachment; filename="guide-utilisateur-portail-htib.pdf"')
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     # -- routage --
     def do_GET(self):
         chemin = urlparse(self.path).path
@@ -293,6 +417,8 @@ class Gestionnaire(BaseHTTPRequestHandler):
             return self.servir_robots()
         if chemin == "/sitemap.xml":
             return self.servir_sitemap()
+        if chemin == "/guide.pdf":
+            return self.servir_guide_pdf()
         routes_get = {
             "/": lambda: self.rediriger("/portail"),
             "/portail": self.vue_portail,
@@ -315,6 +441,7 @@ class Gestionnaire(BaseHTTPRequestHandler):
             "/personnel/etudiants": self.vue_staff_etudiants,
             "/personnel/paiements": self.vue_staff_paiements,
             "/personnel/oeuvres": self.vue_staff_oeuvres,
+            "/personnel/dates": self.vue_staff_dates,
         }
         gest = routes_get.get(chemin)
         if gest:
@@ -344,6 +471,8 @@ class Gestionnaire(BaseHTTPRequestHandler):
             "/personnel/etudiants": self.post_staff_etudiants,
             "/personnel/logement-statut": self.post_staff_logement_statut,
             "/personnel/rdv-statut": self.post_staff_rdv_statut,
+            "/personnel/dates": self.post_staff_dates,
+            "/personnel/dates/supprimer": self.post_staff_dates_supprimer,
         }
         gest = routes_post.get(chemin)
         if gest:
@@ -364,8 +493,9 @@ class Gestionnaire(BaseHTTPRequestHandler):
             cartes = "".join(f'<div class="card"><h3>{esc(p["name"])}</h3><p class="muted">{esc(p["cycle"])}</p></div>' for p in progs)
             contenu_gauche = f"<h2>Offres de formation</h2><div class=\"cards\">{cartes}</div>"
         else:
-            lignes = "".join(f"<tr><td>{c}</td><td>14/09/2026</td><td>12/12/2026</td></tr>" for c in ["Licence", "Master", "Doctorat"])
-            contenu_gauche = f"<h2>Dates importantes</h2><div class=\"card\"><h3>Inscriptions en ligne — Année 2026-2027</h3>{table(['Cycle', 'Début', 'Fin'], lignes)}</div>"
+            dates = conn.execute("SELECT * FROM dates_importantes ORDER BY ordre, id").fetchall()
+            lignes = "".join(f"<tr><td>{esc(d['cycle'])}</td><td>{esc(d['debut'] or '—')}</td><td>{esc(d['fin'] or '—')}</td></tr>" for d in dates)
+            contenu_gauche = f"<h2>Dates importantes</h2><div class=\"card\"><h3>Inscriptions en ligne — Année 2026-2027</h3>{table(['Cycle', 'Début', 'Fin'], lignes, 'Aucune date publiée pour le moment.')}</div>"
         conn.close()
 
         side = f"""<aside class="side">
@@ -375,7 +505,14 @@ class Gestionnaire(BaseHTTPRequestHandler):
           <a href="/personnel/connexion" class="deconnexion" style="color:#063b78;border-top:1px solid #e5eaf0;margin-top:8px;padding-top:12px">Espace personnel</a>
         </aside>"""
         if vue == "guide":
-            contenu_gauche = "<h2>Guide utilisateur</h2><div class=\"card\"><p>Créez un compte selon votre profil, déposez vos vœux de parcours, puis suivez les étapes (unités d'enseignement, paiement, fiche d'inscription) une fois votre parcours accordé par le service de la scolarité.</p></div>"
+            contenu_gauche = (
+                "<h2>Guide utilisateur</h2><div class=\"card\">"
+                "<p>Créez un compte selon votre profil, déposez vos vœux de parcours, puis suivez "
+                "les étapes (unités d'enseignement, paiement, fiche d'inscription) une fois votre "
+                "parcours accordé par le service de la scolarité.</p>"
+                "<a class=\"btn\" style=\"display:inline-block;text-decoration:none;margin-top:10px\" "
+                "href=\"/guide.pdf\">Télécharger le guide complet (PDF)</a></div>"
+            )
 
         profils = [
             ("Nouveau bachelier", "Titulaire d'un BAC obtenu cette année, première inscription."),
@@ -1126,6 +1263,73 @@ class Gestionnaire(BaseHTTPRequestHandler):
         <div class="card"><h3>Structure</h3><p>Établissement → Parcours → Candidature (initiale, réinscription, réorientation, Master Pro) → Unités d'enseignement → Étudiant</p>
         <p class="muted">Les données sont enregistrées dans une vraie base SQLite côté serveur, partagée par tout le personnel connecté.</p></div>"""
         self.envoyer_html(page("Tableau de bord", contenu, nav_staff("tableau")))
+
+    def vue_staff_dates(self, qs=None):
+        s = self.exiger("staff")
+        if not s:
+            return
+        conn = db.connexion()
+        dates = conn.execute("SELECT * FROM dates_importantes ORDER BY ordre, id").fetchall()
+        conn.close()
+        cartes = ""
+        for d in dates:
+            cartes += f"""<div class="card">
+              <form class="form" method="post" action="/personnel/dates">
+                <input type="hidden" name="id" value="{d['id']}">
+                <input name="cycle" value="{esc(d['cycle'])}" placeholder="Cycle" required>
+                <input name="debut" value="{esc(d['debut'] or '')}" placeholder="Début (jj/mm/aaaa)">
+                <input name="fin" value="{esc(d['fin'] or '')}" placeholder="Fin (jj/mm/aaaa)">
+                <button class="btn" type="submit">Enregistrer</button>
+              </form>
+              <form method="post" action="/personnel/dates/supprimer" style="margin-top:6px">
+                <input type="hidden" name="id" value="{d['id']}">
+                <button class="btn danger" type="submit">Supprimer cette ligne</button>
+              </form>
+            </div>"""
+        contenu = f"""<h2>Dates importantes</h2>
+        <p class="muted">Ces dates s'affichent sur la page d'accueil du portail (onglet « Dates importantes »). Modifiez une ligne existante ou ajoutez-en une nouvelle.</p>
+        {cartes if cartes else '<div class="card muted">Aucune date enregistrée pour le moment.</div>'}
+        <div class="card"><h3>Ajouter une ligne</h3>
+          <form class="form" method="post" action="/personnel/dates">
+            <input name="cycle" placeholder="Cycle (ex: Licence Professionnelle)" required>
+            <input name="debut" placeholder="Début (jj/mm/aaaa)">
+            <input name="fin" placeholder="Fin (jj/mm/aaaa)">
+            <button class="btn" type="submit">Ajouter</button>
+          </form>
+        </div>"""
+        self.envoyer_html(page("Dates importantes", contenu, nav_staff("dates")))
+
+    def post_staff_dates(self):
+        s = self.exiger("staff")
+        if not s:
+            return
+        donnees = self.lire_formulaire()
+        cycle = self.champ(donnees, "cycle").strip()
+        debut = self.champ(donnees, "debut").strip()
+        fin = self.champ(donnees, "fin").strip()
+        id_brut = self.champ(donnees, "id").strip()
+        if cycle:
+            conn = db.connexion()
+            if id_brut:
+                conn.execute("UPDATE dates_importantes SET cycle = ?, debut = ?, fin = ? WHERE id = ?", (cycle, debut, fin, int(id_brut)))
+            else:
+                ordre_max = conn.execute("SELECT COALESCE(MAX(ordre), 0) AS m FROM dates_importantes").fetchone()["m"]
+                conn.execute("INSERT INTO dates_importantes (cycle, debut, fin, ordre) VALUES (?, ?, ?, ?)", (cycle, debut, fin, ordre_max + 1))
+            conn.commit()
+            conn.close()
+        self.rediriger("/personnel/dates")
+
+    def post_staff_dates_supprimer(self):
+        s = self.exiger("staff")
+        if not s:
+            return
+        donnees = self.lire_formulaire()
+        id_brut = self.champ(donnees, "id", "0")
+        conn = db.connexion()
+        conn.execute("DELETE FROM dates_importantes WHERE id = ?", (int(id_brut or 0),))
+        conn.commit()
+        conn.close()
+        self.rediriger("/personnel/dates")
 
     def vue_staff_validation(self, qs=None):
         s = self.exiger("staff")

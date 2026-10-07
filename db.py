@@ -133,6 +133,14 @@ CREATE TABLE IF NOT EXISTS paiements (
   date TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS dates_importantes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cycle TEXT NOT NULL,
+  debut TEXT,
+  fin TEXT,
+  ordre INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS students (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   nom TEXT NOT NULL,
@@ -226,4 +234,19 @@ def initialiser():
         if not existe:
             conn.execute("INSERT INTO programs (name, cycle) VALUES (?, ?)", (nom, cycle))
     conn.commit()
+
+    # Dates importantes par défaut (modifiables ensuite par le personnel via
+    # /personnel/dates) — ajoutées une seule fois, même sur une base existante.
+    nb_dates = conn.execute("SELECT COUNT(*) AS n FROM dates_importantes").fetchone()["n"]
+    if nb_dates == 0:
+        dates_defaut = [
+            ("Licence", "14/09/2026", "12/12/2026", 1),
+            ("Master", "14/09/2026", "12/12/2026", 2),
+            ("Doctorat", "14/09/2026", "12/12/2026", 3),
+        ]
+        conn.executemany(
+            "INSERT INTO dates_importantes (cycle, debut, fin, ordre) VALUES (?, ?, ?, ?)",
+            dates_defaut,
+        )
+        conn.commit()
     conn.close()
