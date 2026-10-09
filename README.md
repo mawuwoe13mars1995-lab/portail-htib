@@ -61,6 +61,16 @@ dans le navigateur.
   candidatures (avec le type de chaque demande), carte d'étudiant, module
   Étudiants (fiche simple), suivi des paiements, gestion des demandes
   d'œuvres universitaires.
+- **Comptes candidats** (page Validation) : le personnel peut retrouver
+  l'identifiant de n'importe quel candidat et réinitialiser son mot de passe
+  en un clic (un nouveau mot de passe est généré et affiché une seule fois,
+  à transmettre au candidat) — utile quand un candidat a oublié son
+  identifiant ou son mot de passe, qui ne sont affichés qu'une seule fois à
+  l'inscription.
+- **Sessions de connexion persistantes** : les connexions (personnel et
+  candidats) sont désormais enregistrées dans la base de données plutôt
+  qu'en mémoire — un redémarrage du serveur (mise en veille sur le plan
+  gratuit Render, redéploiement) ne déconnecte plus les utilisateurs.
 
 Pas encore dans cette version (à ajouter ensuite) : présences, emploi du
 temps, communication, rapports imprimables, gestion des comptes du
@@ -218,8 +228,12 @@ enregistrée** (candidats, demandes, paiements...). Ceci ne s'applique pas
 au déploiement Render gratuit de la section 3, dont le stockage est
 temporaire par nature.
 
-## 7. Limite connue (v2)
+## 7. Limites connues
 
-Les sessions de connexion sont gardées en mémoire du serveur : si le serveur
-redémarre, tout le monde doit se reconnecter — mais **aucune donnée n'est
-perdue**, elle reste dans `htib.db`.
+Aucune limite bloquante connue à ce jour pour une démonstration ou un usage
+avec le plan gratuit Render. Pour rappel, sur ce plan gratuit, le stockage
+(`htib.db`) reste temporaire (voir section 3) : les sessions, elles,
+survivent désormais à un redémarrage du serveur, mais si le fichier
+`htib.db` lui-même est effacé (veille prolongée sur Render), tout repart à
+zéro — comptes, candidatures et sessions compris. Pour des données qui ne
+sont jamais effacées, voir l'étape 4 (VPS).

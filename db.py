@@ -151,6 +151,13 @@ CREATE TABLE IF NOT EXISTS dates_importantes (
   ordre INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS sessions (
+  sid TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS students (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   nom TEXT NOT NULL,
@@ -159,6 +166,38 @@ CREATE TABLE IF NOT EXISTS students (
   niveau TEXT
 );
 """
+
+
+def session_creer(kind, user_id):
+    """Crée une session persistante (table sessions) et renvoie son identifiant.
+    Remplace l'ancien dict SESSIONS en mémoire : une session survit désormais
+    à un redémarrage du serveur (redéploiement, veille sur le plan gratuit)."""
+    sid = secrets.token_hex(24)
+    conn = connexion()
+    conn.execute("INSERT INTO sessions (sid, kind, user_id) VALUES (?, ?, ?)", (sid, kind, user_id))
+    conn.commit()
+    conn.close()
+    return sid
+
+
+def session_lire(sid):
+    if not sid:
+        return None
+    conn = connexion()
+    ligne = conn.execute("SELECT kind, user_id FROM sessions WHERE sid = ?", (sid,)).fetchone()
+    conn.close()
+    if not ligne:
+        return None
+    return {"kind": ligne["kind"], "id": ligne["user_id"]}
+
+
+def session_supprimer(sid):
+    if not sid:
+        return
+    conn = connexion()
+    conn.execute("DELETE FROM sessions WHERE sid = ?", (sid,))
+    conn.commit()
+    conn.close()
 
 
 def _colonnes(conn, table):

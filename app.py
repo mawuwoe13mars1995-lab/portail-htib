@@ -32,8 +32,9 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 # SEO qui en dépendent (canonical, sitemap) sont simplement omises.
 DOMAINE_PUBLIC = os.environ.get("DOMAINE_PUBLIC", "").rstrip("/")
 
-# --- Sessions en mémoire : sid -> {"kind": "staff"|"candidat", "id": int} ---
-SESSIONS = {}
+# --- Sessions : stockées dans la base (table sessions), pas en mémoire, pour
+# qu'elles survivent à un redémarrage du serveur (redéploiement, veille sur
+# le plan gratuit Render). Voir db.session_creer / session_lire / session_supprimer.
 
 MONTANT_SCOLARITE = 150000
 
@@ -365,7 +366,7 @@ class Gestionnaire(BaseHTTPRequestHandler):
         cookie = SimpleCookie(self.headers.get("Cookie", ""))
         if "sid" not in cookie:
             return None
-        return SESSIONS.get(cookie["sid"].value)
+        return db.session_lire(cookie["sid"].value)
 
     def exiger(self, kind):
         s = self.session()
@@ -564,6 +565,7 @@ class Gestionnaire(BaseHTTPRequestHandler):
             "/espace/oeuvres/rdv": self.post_oeuvres_rdv,
             "/personnel/voeu-statut": self.post_voeu_statut,
             "/personnel/carte": self.post_carte,
+            "/personnel/candidats/reinitialiser": self.post_staff_candidats_reinitialiser,
             "/personnel/etudiants": self.post_staff_etudiants,
             "/personnel/logement-statut": self.post_staff_logement_statut,
             "/personnel/rdv-statut": self.post_staff_rdv_statut,
@@ -696,8 +698,7 @@ class Gestionnaire(BaseHTTPRequestHandler):
         conn.commit()
         candidat_id = cur.lastrowid
         conn.close()
-        sid = secrets.token_hex(24)
-        SESSIONS[sid] = {"kind": "candidat", "id": candidat_id}
+        sid = db.session_creer("candidat", candidat_id)
         self.rediriger("/espace?nouveau=" + identifiant, set_cookie=f"sid={sid}; HttpOnly; Path=/; SameSite=Lax")
 
     def post_connexion_candidat(self):
@@ -709,15 +710,14 @@ class Gestionnaire(BaseHTTPRequestHandler):
         conn.close()
         if not candidat or not db.verifier_mot_de_passe(mdp, candidat["pass_salt"], candidat["pass_hash"]):
             return self.rediriger("/portail?erreur=" + "Identifiant ou mot de passe incorrect.")
-        sid = secrets.token_hex(24)
-        SESSIONS[sid] = {"kind": "candidat", "id": candidat["id"]}
+        sid = db.session_creer("candidat", candidat["id"])
         self.rediriger("/espace", set_cookie=f"sid={sid}; HttpOnly; Path=/; SameSite=Lax")
 
     def post_deconnexion(self):
         s = self.session()
         cookie = SimpleCookie(self.headers.get("Cookie", ""))
         if "sid" in cookie:
-            SESSIONS.pop(cookie["sid"].value, None)
+            db.session_supprimer(cookie["sid"].value)
         self.rediriger("/portail", set_cookie="sid=; HttpOnly; Path=/; Max-Age=0")
 
     # ------------------------------------------------------------------
@@ -1359,8 +1359,7 @@ class Gestionnaire(BaseHTTPRequestHandler):
         conn.close()
         if not staff or not db.verifier_mot_de_passe(mdp, staff["pass_salt"], staff["pass_hash"]):
             return self.rediriger("/personnel/connexion?erreur=Identifiant ou mot de passe incorrect.")
-        sid = secrets.token_hex(24)
-        SESSIONS[sid] = {"kind": "staff", "id": staff["id"]}
+        sid = db.session_creer("staff", staff["id"])
         self.rediriger("/personnel/tableau", set_cookie=f"sid={sid}; HttpOnly; Path=/; SameSite=Lax")
 
     def vue_staff_tableau(self, qs=None):
@@ -1650,6 +1649,17 @@ class Gestionnaire(BaseHTTPRequestHandler):
         s = self.exiger("staff")
         if not s:
             return
+        qs = qs or {}
+        identifiant_reinit = (qs.get("identifiant") or [""])[0]
+        nouveau_mdp = (qs.get("nouveauMdp") or [""])[0]
+        bandeau_reinit = ""
+        if identifiant_reinit and nouveau_mdp:
+            bandeau_reinit = (
+                f'<div class="card" style="border-color:#063b78">'
+                f'<p>Nouveau mot de passe pour <strong>{esc(identifiant_reinit)}</strong> : '
+                f'<strong>{esc(nouveau_mdp)}</strong> — notez-le et transmettez-le au candidat '
+                f'(il ne sera plus affiché après ce message).</p></div>'
+            )
         conn = db.connexion()
         demandes = conn.execute("SELECT * FROM demandes ORDER BY id DESC").fetchall()
         lignes_demandes = ""
@@ -1683,12 +1693,41 @@ class Gestionnaire(BaseHTTPRequestHandler):
                 carte = '<span class="muted">—</span>'
             prog_nom = programme(conn, voeu_ok["program_id"])["name"] if voeu_ok else '<span class="muted">—</span>'
             lignes_cartes += f"<tr><td>{esc(c['nom'])} {esc(c['prenom'])}</td><td>{esc(prog_nom) if voeu_ok else prog_nom}</td><td>{'Oui' if paie else 'Non'}</td><td>{carte}</td></tr>"
+
+        lignes_comptes = ""
+        for c in candidats:
+            reset = (
+                f'<form method="post" action="/personnel/candidats/reinitialiser" style="display:inline">'
+                f'<input type="hidden" name="candidatId" value="{c["id"]}">'
+                f'<button class="btn" type="submit">Réinitialiser le mot de passe</button></form>'
+            )
+            lignes_comptes += f"<tr><td>{esc(c['nom'])} {esc(c['prenom'])}</td><td>{esc(c['identifiant'])}</td><td>{reset}</td></tr>"
         conn.close()
 
         contenu = f"""<h2>Validation des candidatures</h2>
+        {bandeau_reinit}
         <div class="card"><h3>Demandes de parcours</h3>{table(['Candidat', 'Type', 'Ordre', 'Parcours', 'Statut', 'Action'], lignes_demandes, 'Aucune candidature pour le moment.')}</div>
-        <div class="card"><h3>Cartes d'étudiant</h3>{table(['Candidat', 'Parcours accordé', 'Payé', 'Carte'], lignes_cartes, 'Aucun candidat pour le moment.')}</div>"""
+        <div class="card"><h3>Cartes d'étudiant</h3>{table(['Candidat', 'Parcours accordé', 'Payé', 'Carte'], lignes_cartes, 'Aucun candidat pour le moment.')}</div>
+        <div class="card"><h3>Comptes candidats</h3><p class="muted">Un candidat qui a oublié son identifiant ou son mot de passe ne peut pas les récupérer seul : retrouvez son identifiant ici, ou réinitialisez son mot de passe pour lui en communiquer un nouveau.</p>{table(['Candidat', 'Identifiant', 'Action'], lignes_comptes, 'Aucun candidat pour le moment.')}</div>"""
         self.envoyer_html(page("Validation", contenu, nav_staff("validation")))
+
+    def post_staff_candidats_reinitialiser(self):
+        s = self.exiger("staff")
+        if not s:
+            return
+        donnees = self.lire_formulaire()
+        candidat_id = int(self.champ(donnees, "candidatId"))
+        nouveau_mdp = secrets.token_hex(4)
+        sel, empreinte = db.hacher_mot_de_passe(nouveau_mdp)
+        conn = db.connexion()
+        candidat = conn.execute("SELECT identifiant FROM candidats WHERE id = ?", (candidat_id,)).fetchone()
+        if candidat:
+            conn.execute("UPDATE candidats SET pass_hash = ?, pass_salt = ? WHERE id = ?", (empreinte, sel, candidat_id))
+            conn.commit()
+        conn.close()
+        if not candidat:
+            return self.rediriger("/personnel/validation")
+        self.rediriger(f"/personnel/validation?identifiant={quote(candidat['identifiant'])}&nouveauMdp={quote(nouveau_mdp)}")
 
     def post_voeu_statut(self):
         s = self.exiger("staff")
