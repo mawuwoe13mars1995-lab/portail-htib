@@ -7,14 +7,19 @@ traité par le serveur qui renvoie une page complète (comme un site web
 
 Lancement : python3 app.py   (ou "py app.py" sous Windows)
 """
+import csv
 import html
+import io
 import os
+import re
 import secrets
 import textwrap
 import time
+import zipfile
+import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 import db
 
@@ -124,6 +129,55 @@ def _pdf_assembler(pages_textes):
     return bytes(sortie)
 
 
+def detecter_delimiteur(texte):
+    """Devine le séparateur d'un fichier CSV (virgule ou point-virgule,
+    fréquent dans les exports Excel en français)."""
+    premiere_ligne = texte.splitlines()[0] if texte.splitlines() else ""
+    return ";" if premiere_ligne.count(";") > premiere_ligne.count(",") else ","
+
+
+def lire_csv_simple(contenu_bytes):
+    texte = contenu_bytes.decode("utf-8-sig", errors="replace")
+    return list(csv.reader(io.StringIO(texte), delimiter=detecter_delimiteur(texte)))
+
+
+def lire_xlsx_simple(contenu_bytes):
+    """Lit la première feuille d'un classeur .xlsx à l'aide, uniquement, des
+    modules zipfile et xml.etree.ElementTree de la bibliothèque standard
+    (pas de openpyxl ni d'autre bibliothèque externe). Limite connue :
+    suppose des colonnes contiguës à partir de A, sans cellule vide isolée
+    au milieu d'une ligne."""
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(contenu_bytes)) as z:
+        chaines = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            arbre = ET.fromstring(z.read("xl/sharedStrings.xml"))
+            for si in arbre.findall(f"{ns}si"):
+                chaines.append("".join(t.text or "" for t in si.iter(f"{ns}t")))
+        feuilles = sorted(n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml"))
+        if not feuilles:
+            return []
+        arbre = ET.fromstring(z.read(feuilles[0]))
+        lignes = []
+        for row in arbre.iter(f"{ns}row"):
+            valeurs = []
+            for cell in row.findall(f"{ns}c"):
+                type_cellule = cell.get("t")
+                if type_cellule == "inlineStr":
+                    texte_cell = "".join(t.text or "" for t in cell.iter(f"{ns}t"))
+                else:
+                    v = cell.find(f"{ns}v")
+                    texte_cell = v.text if v is not None else ""
+                    if type_cellule == "s" and texte_cell != "":
+                        try:
+                            texte_cell = chaines[int(texte_cell)]
+                        except (ValueError, IndexError):
+                            texte_cell = ""
+                valeurs.append(texte_cell)
+            lignes.append(valeurs)
+        return lignes
+
+
 def construire_guide_pdf():
     marge_haut, marge_bas, x = 792, 56, 56
     pages, flux, y = [], [], [marge_haut]
@@ -210,6 +264,7 @@ def nav_staff(actif=""):
         ("/personnel/tableau", "Tableau de bord", "tableau"),
         ("/personnel/dates", "Dates importantes", "dates"),
         ("/personnel/validation", "Validation Candidatures", "validation"),
+        ("/personnel/examens", "Examens et notes", "examens"),
         ("/personnel/etudiants", "Étudiants", "etudiants"),
         ("/personnel/paiements", "Paiements", "paiements"),
         ("/personnel/oeuvres", "Œuvres universitaires", "oeuvres"),
@@ -327,6 +382,46 @@ class Gestionnaire(BaseHTTPRequestHandler):
     def champ(self, donnees, nom, defaut=""):
         return donnees.get(nom, [defaut])[0]
 
+    def lire_multipart(self):
+        """Lit un formulaire multipart/form-data (envoi de fichier compris),
+        à la main et sans bibliothèque externe (ni le module cgi, obsolète).
+        Retourne un dict nom_champ -> (contenu_bytes, nom_fichier_ou_None)."""
+        resultat = {}
+        ctype = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in ctype:
+            return resultat
+        boundary = None
+        for morceau in ctype.split(";"):
+            morceau = morceau.strip()
+            if morceau.startswith("boundary="):
+                boundary = morceau[len("boundary="):].strip('"')
+        if not boundary:
+            return resultat
+        longueur = int(self.headers.get("Content-Length", 0) or 0)
+        corps = self.rfile.read(longueur) if longueur else b""
+        delimiteur = b"--" + boundary.encode("utf-8")
+        for partie in corps.split(delimiteur):
+            partie = partie.strip(b"\r\n")
+            if not partie or partie == b"--":
+                continue
+            if b"\r\n\r\n" not in partie:
+                continue
+            entetes_brut, contenu = partie.split(b"\r\n\r\n", 1)
+            if contenu.endswith(b"\r\n"):
+                contenu = contenu[:-2]
+            entetes = entetes_brut.decode("utf-8", errors="replace")
+            m_nom = re.search(r'name="([^"]*)"', entetes)
+            m_fichier = re.search(r'filename="([^"]*)"', entetes)
+            if m_nom:
+                resultat[m_nom.group(1)] = (contenu, m_fichier.group(1) if m_fichier else None)
+        return resultat
+
+    def champ_multipart(self, donnees, nom, defaut=""):
+        if nom not in donnees:
+            return defaut
+        contenu, _ = donnees[nom]
+        return contenu.decode("utf-8", errors="replace").strip()
+
     def envoyer_html(self, corps, statut=200, set_cookie=None):
         data = corps.encode("utf-8")
         self.send_response(statut)
@@ -442,6 +537,7 @@ class Gestionnaire(BaseHTTPRequestHandler):
             "/personnel/paiements": self.vue_staff_paiements,
             "/personnel/oeuvres": self.vue_staff_oeuvres,
             "/personnel/dates": self.vue_staff_dates,
+            "/personnel/examens": self.vue_staff_examens,
         }
         gest = routes_get.get(chemin)
         if gest:
@@ -473,6 +569,8 @@ class Gestionnaire(BaseHTTPRequestHandler):
             "/personnel/rdv-statut": self.post_staff_rdv_statut,
             "/personnel/dates": self.post_staff_dates,
             "/personnel/dates/supprimer": self.post_staff_dates_supprimer,
+            "/personnel/examens/saisie": self.post_staff_examens_saisie,
+            "/personnel/examens/import": self.post_staff_examens_import,
         }
         gest = routes_post.get(chemin)
         if gest:
@@ -1050,7 +1148,15 @@ class Gestionnaire(BaseHTTPRequestHandler):
                 (insc["id"],),
             ).fetchall()
             for u in ues:
-                lignes += f"<tr><td>{esc(u['code'])}</td><td>{esc(u['libelle'])}</td><td class=\"muted\">Non disponible</td></tr>"
+                notes_ue = conn.execute(
+                    "SELECT session, note FROM notes WHERE candidat_id = ? AND ue_id = ? ORDER BY session", (s["id"], u["id"])
+                ).fetchall()
+                if notes_ue:
+                    cellule_note = ", ".join(f"{esc(n['session'])} : {n['note']:.2f}/20" for n in notes_ue if n["note"] is not None)
+                    cellule_note = cellule_note or '<span class="muted">Non disponible</span>'
+                else:
+                    cellule_note = '<span class="muted">Non disponible</span>'
+                lignes += f"<tr><td>{esc(u['code'])}</td><td>{esc(u['libelle'])}</td><td>{cellule_note}</td></tr>"
         conn.close()
         contenu = f"""<h2>Notes</h2><div class="card">{table(['Code UE', 'Libellé', 'Note'], lignes, "Aucune UE inscrite pour le moment.")}</div>
         <p class="muted">Les notes sont publiées par le service de la scolarité après chaque session d'examens.</p>"""
@@ -1081,12 +1187,38 @@ class Gestionnaire(BaseHTTPRequestHandler):
             return
         conn = db.connexion()
         candidat = conn.execute("SELECT * FROM candidats WHERE id = ?", (s["id"],)).fetchone()
+        insc = inscription_de_candidat(conn, s["id"])
+        lignes = ""
+        notes_valides = []
+        if insc:
+            ues = conn.execute(
+                """SELECT u.* FROM ue_catalogue u JOIN inscriptions_ue_items i ON u.id = i.ue_id
+                   WHERE i.inscription_id = ? ORDER BY u.code""",
+                (insc["id"],),
+            ).fetchall()
+            for u in ues:
+                n = conn.execute(
+                    "SELECT note FROM notes WHERE candidat_id = ? AND ue_id = ? ORDER BY (session = 'Normale') DESC, id DESC LIMIT 1",
+                    (s["id"], u["id"]),
+                ).fetchone()
+                valeur = n["note"] if n and n["note"] is not None else None
+                if valeur is not None:
+                    notes_valides.append((valeur, u["credit"]))
+                    cellule_note = f"{valeur:.2f}/20"
+                else:
+                    cellule_note = '<span class="muted">—</span>'
+                lignes += f"<tr><td>{esc(u['code'])}</td><td>{esc(u['libelle'])}</td><td>{u['credit']}</td><td>{cellule_note}</td></tr>"
         conn.close()
-        contenu = """<h2>Relevés de notes</h2><div class="card">
-        <p class="muted">Aucun relevé de notes disponible pour le moment. Les relevés officiels sont délivrés par le
-        service de la scolarité après la proclamation des résultats de fin de semestre.</p></div>"""
+        if notes_valides:
+            total_credits = sum(c for _, c in notes_valides)
+            moyenne = sum(v * c for v, c in notes_valides) / total_credits if total_credits else 0
+            bas = f"<p><strong>Moyenne générale pondérée : {moyenne:.2f}/20</strong></p>"
+        else:
+            bas = '<p class="muted">Aucune note publiée pour le moment.</p>'
+        contenu = f"""<h2>Relevé de notes</h2><div class="card">{table(['Code UE', 'Libellé', 'Crédit', 'Note'], lignes, "Aucune UE inscrite pour le moment.")}{bas}</div>
+        <p class="muted">Relevé indicatif généré automatiquement à partir des notes publiées ; le relevé officiel est délivré par le service de la scolarité.</p>"""
         corps = f'<div class="espace-wrap"><aside class="side">{self.menu_espace("releves", candidat["profil"])}</aside><div>{contenu}</div></div>'
-        self.envoyer_html(page("Relevés de notes", corps, nav_candidat()))
+        self.envoyer_html(page("Relevé de notes", corps, nav_candidat()))
 
     # ------------------------------------------------------------------
     # Œuvres universitaires (logement, fiche médicale, rendez-vous)
@@ -1330,6 +1462,189 @@ class Gestionnaire(BaseHTTPRequestHandler):
         conn.commit()
         conn.close()
         self.rediriger("/personnel/dates")
+
+    # ------------------------------------------------------------------
+    # Examens et notes (saisie directe ou import CSV/Excel)
+    # ------------------------------------------------------------------
+    def vue_staff_examens(self, qs=None):
+        s = self.exiger("staff")
+        if not s:
+            return
+        qs = qs or {}
+        program_id = (qs.get("programId") or [""])[0]
+        ue_id = (qs.get("ueId") or [""])[0]
+        session_examen = (qs.get("session") or ["Normale"])[0]
+        message = (qs.get("message") or [""])[0]
+
+        conn = db.connexion()
+        progs = conn.execute("SELECT * FROM programs ORDER BY name").fetchall()
+        options_progs = "".join(
+            f'<option value="{p["id"]}" {"selected" if str(p["id"]) == program_id else ""}>{esc(p["name"])}</option>'
+            for p in progs
+        )
+        ues_du_parcours = []
+        if program_id:
+            ues_du_parcours = conn.execute(
+                "SELECT * FROM ue_catalogue WHERE program_id = ? ORDER BY code", (program_id,)
+            ).fetchall()
+        options_ues = "".join(
+            f'<option value="{u["id"]}" {"selected" if str(u["id"]) == ue_id else ""}>{esc(u["code"])} — {esc(u["libelle"])}</option>'
+            for u in ues_du_parcours
+        )
+        toutes_ues = conn.execute(
+            "SELECT u.*, p.name AS programme_nom FROM ue_catalogue u JOIN programs p ON u.program_id = p.id ORDER BY p.name, u.code"
+        ).fetchall()
+        options_toutes_ues = "".join(
+            f'<option value="{u["id"]}">{esc(u["programme_nom"])} — {esc(u["code"])} : {esc(u["libelle"])}</option>'
+            for u in toutes_ues
+        )
+
+        bloc_saisie = ""
+        if ue_id:
+            etudiants = conn.execute(
+                """SELECT c.id, c.nom, c.prenom, c.matricule FROM candidats c
+                   JOIN inscriptions_ue iu ON iu.candidat_id = c.id
+                   JOIN inscriptions_ue_items iui ON iui.inscription_id = iu.id
+                   WHERE iui.ue_id = ? ORDER BY c.nom, c.prenom""",
+                (ue_id,),
+            ).fetchall()
+            if etudiants:
+                lignes_saisie = ""
+                for e in etudiants:
+                    existante = conn.execute(
+                        "SELECT note FROM notes WHERE candidat_id = ? AND ue_id = ? AND session = ?",
+                        (e["id"], ue_id, session_examen),
+                    ).fetchone()
+                    valeur = "" if not existante or existante["note"] is None else existante["note"]
+                    lignes_saisie += (
+                        f"<tr><td>{esc(e['nom'])} {esc(e['prenom'])}</td><td>{esc(e['matricule'] or '—')}</td>"
+                        f'<td><input name="note_{e["id"]}" type="number" step="0.01" min="0" max="20" value="{valeur}" style="width:90px"></td></tr>'
+                    )
+                bloc_saisie = f"""<div class="card"><h3>Saisie directe des notes — session {esc(session_examen)}</h3>
+                <form method="post" action="/personnel/examens/saisie">
+                  <input type="hidden" name="ueId" value="{ue_id}">
+                  <input type="hidden" name="session" value="{esc(session_examen)}">
+                  {table(['Étudiant', 'Matricule', 'Note /20'], lignes_saisie)}
+                  <button class="btn" type="submit" style="margin-top:10px">Enregistrer les notes</button>
+                </form></div>"""
+            else:
+                bloc_saisie = '<div class="card muted">Aucun étudiant inscrit à cette UE pour le moment.</div>'
+        conn.close()
+
+        selecteur = f"""<div class="card"><h3>Choisir une UE</h3><form class="form" method="get" action="/personnel/examens">
+          <select name="programId"><option value="">Choisir un parcours…</option>{options_progs}</select>
+          <select name="ueId"><option value="">Choisir une UE…</option>{options_ues}</select>
+          <input name="session" value="{esc(session_examen)}" placeholder="Session (ex: Normale, Rattrapage)">
+          <button class="btn" type="submit">Afficher les étudiants</button>
+        </form><p class="muted">Choisissez d'abord le parcours et validez, la liste des UE de ce parcours apparaît ensuite.</p></div>"""
+
+        bloc_import = f"""<div class="card"><h3>Importer les notes depuis un fichier (CSV ou Excel .xlsx)</h3>
+        <p class="muted">Le fichier doit contenir une ligne d'en-têtes avec au moins une colonne « identifiant » ou « matricule », et une colonne « note ». Seule la première feuille d'un fichier Excel est lue.</p>
+        <form method="post" action="/personnel/examens/import" enctype="multipart/form-data">
+          <select name="ueId" required><option value="">UE concernée…</option>{options_toutes_ues}</select>
+          <input name="session" value="Normale" placeholder="Session (ex: Normale, Rattrapage)">
+          <input type="file" name="fichier" accept=".csv,.xlsx" required>
+          <button class="btn" type="submit">Importer</button>
+        </form></div>"""
+
+        bandeau = f'<div class="card" style="border-color:#063b78"><p>{esc(message)}</p></div>' if message else ""
+        contenu = f"<h2>Examens et notes</h2>{bandeau}{selecteur}{bloc_saisie}{bloc_import}"
+        self.envoyer_html(page("Examens et notes", contenu, nav_staff("examens")))
+
+    def post_staff_examens_saisie(self):
+        s = self.exiger("staff")
+        if not s:
+            return
+        donnees = self.lire_formulaire()
+        ue_id = int(self.champ(donnees, "ueId", "0") or 0)
+        session_examen = self.champ(donnees, "session", "Normale").strip() or "Normale"
+        program_id = ""
+        if ue_id:
+            conn = db.connexion()
+            ue = conn.execute("SELECT program_id FROM ue_catalogue WHERE id = ?", (ue_id,)).fetchone()
+            program_id = ue["program_id"] if ue else ""
+            for cle in donnees:
+                if cle.startswith("note_"):
+                    valeur = self.champ(donnees, cle, "").strip()
+                    if valeur == "":
+                        continue
+                    try:
+                        note = max(0.0, min(20.0, float(valeur)))
+                    except ValueError:
+                        continue
+                    candidat_id = int(cle[len("note_"):])
+                    conn.execute(
+                        "INSERT INTO notes (candidat_id, ue_id, note, session) VALUES (?, ?, ?, ?) "
+                        "ON CONFLICT(candidat_id, ue_id, session) DO UPDATE SET note = excluded.note",
+                        (candidat_id, ue_id, note, session_examen),
+                    )
+            conn.commit()
+            conn.close()
+        self.rediriger(f"/personnel/examens?programId={program_id}&ueId={ue_id}&session={quote(session_examen)}")
+
+    def post_staff_examens_import(self):
+        s = self.exiger("staff")
+        if not s:
+            return
+        champs = self.lire_multipart()
+        ue_id = int(self.champ_multipart(champs, "ueId", "0") or 0)
+        session_examen = self.champ_multipart(champs, "session", "Normale").strip() or "Normale"
+        fichier = champs.get("fichier")
+        message = "Choisissez une UE et un fichier."
+
+        if ue_id and fichier:
+            contenu, nom_fichier = fichier
+            try:
+                if nom_fichier and nom_fichier.lower().endswith(".xlsx"):
+                    lignes = lire_xlsx_simple(contenu)
+                else:
+                    lignes = lire_csv_simple(contenu)
+            except Exception:
+                lignes = []
+
+            if not lignes:
+                message = "Le fichier n'a pas pu être lu. Vérifiez qu'il s'agit bien d'un CSV ou d'un .xlsx valide."
+            else:
+                entetes = [str(c).strip().lower() for c in lignes[0]]
+                idx_ident = entetes.index("identifiant") if "identifiant" in entetes else None
+                idx_matricule = entetes.index("matricule") if "matricule" in entetes else None
+                idx_note = entetes.index("note") if "note" in entetes else None
+                if idx_note is None or (idx_ident is None and idx_matricule is None):
+                    message = "Colonnes attendues introuvables : il faut une colonne « identifiant » ou « matricule », et une colonne « note »."
+                else:
+                    conn = db.connexion()
+                    nb_importees = 0
+                    for ligne in lignes[1:]:
+                        if len(ligne) <= idx_note:
+                            continue
+                        valeur_brute = str(ligne[idx_note]).strip().replace(",", ".")
+                        if valeur_brute == "":
+                            continue
+                        try:
+                            note = max(0.0, min(20.0, float(valeur_brute)))
+                        except ValueError:
+                            continue
+                        candidat = None
+                        if idx_ident is not None and len(ligne) > idx_ident and str(ligne[idx_ident]).strip():
+                            candidat = conn.execute(
+                                "SELECT id FROM candidats WHERE identifiant = ?", (str(ligne[idx_ident]).strip(),)
+                            ).fetchone()
+                        if not candidat and idx_matricule is not None and len(ligne) > idx_matricule and str(ligne[idx_matricule]).strip():
+                            candidat = conn.execute(
+                                "SELECT id FROM candidats WHERE matricule = ?", (str(ligne[idx_matricule]).strip(),)
+                            ).fetchone()
+                        if not candidat:
+                            continue
+                        conn.execute(
+                            "INSERT INTO notes (candidat_id, ue_id, note, session) VALUES (?, ?, ?, ?) "
+                            "ON CONFLICT(candidat_id, ue_id, session) DO UPDATE SET note = excluded.note",
+                            (candidat["id"], ue_id, note, session_examen),
+                        )
+                        nb_importees += 1
+                    conn.commit()
+                    conn.close()
+                    message = f"{nb_importees} note(s) importée(s) avec succès." if nb_importees else "Aucune ligne valide n'a été trouvée (identifiant/matricule inconnu ou note manquante)."
+        self.rediriger(f"/personnel/examens?ueId={ue_id}&session={quote(session_examen)}&message={quote(message)}")
 
     def vue_staff_validation(self, qs=None):
         s = self.exiger("staff")

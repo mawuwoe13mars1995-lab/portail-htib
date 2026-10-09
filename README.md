@@ -39,20 +39,32 @@ dans le navigateur.
 - **Unités d'enseignement en 5 onglets**, comme sur PAUL : UE obligatoires
   (auto-inscrites), UE libres (choix), Désinscription (retirer une UE
   libre), UE choisies (récapitulatif), UE confirmées (après paiement).
-- **Résultats** : Notes (par UE inscrite), Cursus (historique des
-  demandes/parcours), Relevés de notes.
+- **Résultats** : Notes (par UE inscrite, par session), Cursus (historique
+  des demandes/parcours), Relevés de notes (moyenne générale pondérée par
+  les crédits, calculée automatiquement).
 - **Œuvres universitaires** : demande de logement, fiche d'analyse médicale
   (paiement des frais), prise de rendez-vous — chacune suivie et traitée
   côté personnel.
+- **Dates importantes** modifiables par le personnel (ajout/modification/
+  suppression), affichées en direct sur la page d'accueil du portail.
+- **Guide utilisateur téléchargeable en PDF** depuis le portail public
+  (fichier généré par l'application elle-même, sans bibliothèque externe).
+- **Examens et notes** côté personnel : saisie directe des notes par UE et
+  par session (Normale, Rattrapage...) pour tous les étudiants inscrits à
+  cette UE, ou import en masse depuis un fichier **CSV ou Excel (.xlsx)** —
+  colonnes attendues : « identifiant » ou « matricule », et « note ». La
+  lecture du fichier Excel est faite par l'application elle-même (modules
+  `zipfile` et `xml` de la bibliothèque standard), sans openpyxl ni aucune
+  autre dépendance à installer.
 - Côté personnel : tableau de bord détaillé (candidatures par type, vœux en
   attente, demandes de logement/rendez-vous en attente), validation des
   candidatures (avec le type de chaque demande), carte d'étudiant, module
   Étudiants (fiche simple), suivi des paiements, gestion des demandes
   d'œuvres universitaires.
 
-Pas encore dans cette version (à ajouter ensuite) : présences, examens,
-emploi du temps, communication, rapports imprimables, gestion des comptes
-du personnel, années académiques, paramètres.
+Pas encore dans cette version (à ajouter ensuite) : présences, emploi du
+temps, communication, rapports imprimables, gestion des comptes du
+personnel, années académiques, paramètres.
 
 ## 2. Lancer l'application sur votre ordinateur
 

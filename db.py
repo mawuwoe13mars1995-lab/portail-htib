@@ -133,6 +133,16 @@ CREATE TABLE IF NOT EXISTS paiements (
   date TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  candidat_id INTEGER NOT NULL REFERENCES candidats(id),
+  ue_id INTEGER NOT NULL REFERENCES ue_catalogue(id),
+  note REAL,
+  session TEXT NOT NULL DEFAULT 'Normale',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(candidat_id, ue_id, session)
+);
+
 CREATE TABLE IF NOT EXISTS dates_importantes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   cycle TEXT NOT NULL,
